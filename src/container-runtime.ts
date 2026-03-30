@@ -111,6 +111,12 @@ export function buildVolumeMounts(
 
 function buildDockerArgs(mounts: VolumeMount[], containerName: string): string[] {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
+
+  // Memory limit: 1GB per container (VM total 2GB, leave headroom for orchestrator)
+  const memLimit = process.env.BIOCLAW_CONTAINER_MEMORY || '1g';
+  args.push(`--memory=${memLimit}`);
+  args.push(`--memory-swap=${memLimit}`); // no swap — prevent host OOM
+
   for (const mount of mounts) {
     if (mount.readonly) {
       args.push('-v', `${mount.hostPath}:${mount.containerPath}:ro`);

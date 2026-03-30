@@ -33,6 +33,7 @@ export const FEISHU_HOST = process.env.FEISHU_HOST || '0.0.0.0';
 export const FEISHU_PORT = parseInt(process.env.FEISHU_PORT || '8080', 10);
 export const FEISHU_PATH = process.env.FEISHU_PATH || '/feishu/events';
 export const ENABLE_WECHAT = process.env.ENABLE_WECHAT === 'true';
+export const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 
 /** If set, require Authorization: Bearer <token> or ?token= on trace API routes */
 export const DASHBOARD_TOKEN = process.env.DASHBOARD_TOKEN || '';

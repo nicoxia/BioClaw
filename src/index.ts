@@ -74,6 +74,7 @@ import { WhatsAppChannel } from './channels/whatsapp/channel.js';
 import { WeComChannel } from './channels/wecom.js';
 import { DiscordChannel } from './channels/discord.js';
 import { SlackChannel } from './channels/slack.js';
+import { TelegramChannel } from './channels/telegram.js';
 import { WeChatChannel } from './channels/wechat.js';
 import { Channel, NewMessage } from './types.js';
 import { logger } from './logger.js';
@@ -682,6 +683,12 @@ async function main(): Promise<void> {
     const slack = new SlackChannel({ botToken: process.env.SLACK_BOT_TOKEN, appToken: process.env.SLACK_APP_TOKEN, ...channelCallbacks });
     channels.push(slack);
     try { await slack.connect(); } catch (err) { logger.error({ err }, 'Slack connection failed'); }
+  }
+
+  if (process.env.TELEGRAM_BOT_TOKEN) {
+    const telegram = new TelegramChannel({ token: process.env.TELEGRAM_BOT_TOKEN, ...channelCallbacks });
+    channels.push(telegram);
+    try { await telegram.connect(); } catch (err) { logger.error({ err }, 'Telegram connection failed'); }
   }
 
   // --- Subsystems ---
