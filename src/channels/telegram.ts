@@ -129,6 +129,11 @@ export class TelegramChannel implements Channel {
     const timestamp = new Date(msg.date * 1000).toISOString();
     let content = msg.text;
 
+    // Strip @botname from commands (e.g., /models@xxb_bioclaw_bot → /models)
+    if (this.me?.username && content.startsWith('/')) {
+      content = content.replace(new RegExp(`@${this.me.username}`, 'g'), '').trim();
+    }
+
     if (isGroup) {
       const botUsername = this.me?.username;
       const isMentioned = botUsername ? content.includes(`@${botUsername}`) : false;
