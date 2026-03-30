@@ -756,7 +756,11 @@ export async function executeControlCommand(
         lines.push(`  ${i + 1}. ${m.label}${marker}`);
       });
       lines.push('', '输入 /models <编号> 快速切换');
-      return { handled: true, response: lines.join('\n') };
+      return {
+        handled: true,
+        response: lines.join('\n'),
+        data: { type: 'model_picker', currentModel, catalog: catalog.map(m => ({ id: m.id, label: m.label })) },
+      };
     }
     case '/provider': {
       if (!agent || !agentId) {

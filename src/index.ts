@@ -474,7 +474,18 @@ async function handleInboundMessage(msg: NewMessage): Promise<void> {
     }
     notifyLocalWebWorkspaceUpdate(msg.chat_jid);
     if (commandResult.response) {
-      await sendToChannel(msg.chat_jid, commandResult.response);
+      // Special handling: model picker keyboard for Telegram
+      const data = commandResult.data as any;
+      if (data?.type === 'model_picker' && data.currentModel) {
+        const ch = channelForJid(msg.chat_jid);
+        if (ch && ch.name === 'telegram' && 'sendModelPicker' in ch) {
+          await (ch as any).sendModelPicker(msg.chat_jid, data.currentModel);
+        } else {
+          await sendToChannel(msg.chat_jid, commandResult.response);
+        }
+      } else {
+        await sendToChannel(msg.chat_jid, commandResult.response);
+      }
     }
     return;
   }

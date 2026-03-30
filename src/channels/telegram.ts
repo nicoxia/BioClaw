@@ -1,6 +1,7 @@
 /**
  * Telegram channel for BioClaw.
  * Uses Telegram Bot API via long-polling (getUpdates).
+ * Supports inline keyboards and callback queries.
  * No external dependency — native Node.js fetch is sufficient.
  *
  * Env vars:
@@ -13,7 +14,7 @@ import { Channel, OnInboundMessage, OnChatMetadata, RegisteredGroup } from '../t
 const TELEGRAM_JID_SUFFIX_CHAT = '@telegram.chat';
 const TELEGRAM_JID_SUFFIX_DM = '@telegram.dm';
 const TELEGRAM_MESSAGE_LIMIT = 4096;
-const POLL_TIMEOUT = 30; // seconds
+const POLL_TIMEOUT = 30;
 
 export interface TelegramChannelOpts {
   token: string;
@@ -23,24 +24,15 @@ export interface TelegramChannelOpts {
   autoRegister?: (jid: string, name: string, channelName: string) => void;
 }
 
-interface TelegramMessage {
-  message_id: number;
-  chat: { id: number; type: string; title?: string; username?: string };
-  from?: { id: number; is_bot?: boolean; first_name?: string; last_name?: string; username?: string };
-  text?: string;
-  date: number;
-}
-
-interface TelegramUpdate {
-  update_id: number;
-  message?: TelegramMessage;
-}
-
 interface TelegramUser {
   id: number;
   is_bot: boolean;
   first_name: string;
   username?: string;
+}
+
+interface InlineKeyboard {
+  inline_keyboard: Array<Array<{ text: string; callback_data: string }>>;
 }
 
 export class TelegramChannel implements Channel {
@@ -62,7 +54,6 @@ export class TelegramChannel implements Channel {
   }
 
   async connect(): Promise<void> {
-    // Verify token by getting bot info
     const res = await this.api('getMe');
     if (!res.ok) {
       throw new Error(`Telegram auth failed: ${JSON.stringify(res)}`);
@@ -73,8 +64,6 @@ export class TelegramChannel implements Channel {
       { botUsername: this.me!.username, botName: this.me!.first_name },
       'Connected to Telegram',
     );
-
-    // Start long-polling loop
     this.startPolling();
   }
 
@@ -100,33 +89,32 @@ export class TelegramChannel implements Channel {
       const res = await this.api('getUpdates', {
         offset: this.offset,
         timeout: POLL_TIMEOUT,
-        allowed_updates: ['message'],
+        allowed_updates: ['message', 'callback_query'],
       });
 
       if (res.ok && Array.isArray(res.result)) {
         for (const update of res.result) {
-          this.handleUpdate(update as TelegramUpdate);
+          if (update.message) {
+            this.handleMessage(update.message);
+          }
+          if (update.callback_query) {
+            this.handleCallbackQuery(update.callback_query);
+          }
           this.offset = update.update_id + 1;
         }
       }
     } catch (err) {
       logger.error({ err }, 'Telegram poll error');
-      // Wait a bit before retrying on error
       await new Promise((r) => setTimeout(r, 3000));
     }
 
-    // Continue polling
     if (this.polling) {
       setImmediate(() => this.poll());
     }
   }
 
-  private handleUpdate(update: TelegramUpdate): void {
-    const msg = update.message;
-    if (!msg || !msg.text) return;
-    if (!msg.from) return;
-
-    // Ignore messages from bots
+  private handleMessage(msg: any): void {
+    if (!msg || !msg.text || !msg.from) return;
     if (msg.from.is_bot) return;
 
     const isGroup = msg.chat.type === 'group' || msg.chat.type === 'supergroup';
@@ -136,20 +124,15 @@ export class TelegramChannel implements Channel {
       : `${msg.from.id}${TELEGRAM_JID_SUFFIX_DM}`;
 
     const senderName = [msg.from.first_name, msg.from.last_name].filter(Boolean).join(' ')
-      || msg.from.username
-      || String(msg.from.id);
+      || msg.from.username || String(msg.from.id);
 
     const timestamp = new Date(msg.date * 1000).toISOString();
     let content = msg.text;
 
-    // In groups, only respond when mentioned (@bot) or when the message is a reply to the bot
     if (isGroup) {
       const botUsername = this.me?.username;
       const isMentioned = botUsername ? content.includes(`@${botUsername}`) : false;
-
       if (!isMentioned) return;
-
-      // Strip the @bot mention from content
       if (botUsername) {
         content = content.replace(new RegExp(`@${botUsername}\\s*`, 'g'), '').trim();
       }
@@ -157,22 +140,13 @@ export class TelegramChannel implements Channel {
 
     if (!content) return;
 
-    logger.info(
-      { chatJid, sender: senderName, isGroup, contentPreview: content.slice(0, 80) },
-      'Telegram message received',
-    );
+    logger.info({ chatJid, sender: senderName, isGroup, contentPreview: content.slice(0, 80) }, 'Telegram message received');
 
-    this.opts.onChatMetadata(
-      chatJid,
-      timestamp,
-      isGroup ? (msg.chat.title || `Telegram Group ${chatId}`) : undefined,
-    );
+    this.opts.onChatMetadata(chatJid, timestamp, isGroup ? (msg.chat.title || `Telegram Group ${chatId}`) : undefined);
 
     let groups = this.opts.registeredGroups();
     if (!groups[chatJid] && this.opts.autoRegister) {
-      const chatName = isGroup
-        ? `Telegram ${msg.chat.title || chatId}`
-        : `Telegram DM ${senderName}`;
+      const chatName = isGroup ? `Telegram ${msg.chat.title || chatId}` : `Telegram DM ${senderName}`;
       this.opts.autoRegister(chatJid, chatName, 'telegram');
       groups = this.opts.registeredGroups();
     }
@@ -192,7 +166,48 @@ export class TelegramChannel implements Channel {
     }
   }
 
-  async sendMessage(jid: string, text: string): Promise<void> {
+  private async handleCallbackQuery(query: any): Promise<void> {
+    const data = query.data as string;
+    if (!data) return;
+
+    const chatId = query.message?.chat?.id;
+    const fromId = query.from?.id;
+
+    logger.info({ data, chatId, fromId }, 'Telegram callback query received');
+
+    // Answer the callback query immediately (remove loading state)
+    await this.api('answerCallbackQuery', { callback_query_id: query.id });
+
+    // Process as a regular message with the callback_data as content
+    if (!chatId || !fromId) return;
+
+    const isGroup = query.message.chat.type === 'group' || query.message.chat.type === 'supergroup';
+    const chatJid = isGroup
+      ? `${chatId}${TELEGRAM_JID_SUFFIX_CHAT}`
+      : `${fromId}${TELEGRAM_JID_SUFFIX_DM}`;
+
+    const senderName = [query.from.first_name, query.from.last_name].filter(Boolean).join(' ')
+      || query.from.username || String(fromId);
+
+    const timestamp = new Date().toISOString();
+
+    this.opts.onChatMetadata(chatJid, timestamp);
+    let groups = this.opts.registeredGroups();
+
+    if (groups[chatJid]) {
+      this.opts.onMessage(chatJid, {
+        id: `cb-${query.id}`,
+        chat_jid: chatJid,
+        sender: String(fromId),
+        sender_name: senderName,
+        content: data,
+        timestamp,
+        is_from_me: false,
+      });
+    }
+  }
+
+  async sendMessage(jid: string, text: string, replyMarkup?: InlineKeyboard): Promise<void> {
     const chatId = this.extractChatId(jid);
     if (!chatId) {
       logger.warn({ jid }, 'Cannot resolve Telegram chat ID');
@@ -200,16 +215,65 @@ export class TelegramChannel implements Channel {
     }
 
     const chunks = this.splitMessage(text, TELEGRAM_MESSAGE_LIMIT);
-    for (const chunk of chunks) {
-      const res = await this.api('sendMessage', {
+    for (let i = 0; i < chunks.length; i++) {
+      const body: Record<string, unknown> = {
         chat_id: chatId,
-        text: chunk,
-      });
+        text: chunks[i],
+      };
+      // Only attach keyboard to the last chunk
+      if (replyMarkup && i === chunks.length - 1) {
+        body.reply_markup = replyMarkup;
+      }
+      const res = await this.api('sendMessage', body);
       if (!res.ok) {
         logger.warn({ chatId, error: res.description }, 'Telegram sendMessage failed');
       }
     }
     logger.info({ jid, length: text.length, chunks: chunks.length }, 'Telegram message sent');
+  }
+
+  async sendModelPicker(jid: string, currentModel: string): Promise<void> {
+    const chatId = this.extractChatId(jid);
+    if (!chatId) return;
+
+    const models = [
+      { id: 'qwen/qwen3-next-80b-a3b-instruct', label: '⚡ Qwen3-Next 80B' },
+      { id: 'mistralai/mistral-small-3.1-24b-instruct-2503', label: '⚡ Mistral Small' },
+      { id: 'stepfun-ai/step-3.5-flash', label: '⚡ Step-3.5 Flash' },
+      { id: 'qwen/qwen3.5-122b-a10b', label: '⚡ Qwen3.5 122B' },
+      { id: 'deepseek-ai/deepseek-v3.1', label: '🔧 DeepSeek V3.1' },
+      { id: 'qwen/qwen3.5-397b-a17b', label: '🔧 Qwen3.5 397B' },
+      { id: 'deepseek-ai/deepseek-v3.2', label: '💪 DeepSeek V3.2' },
+      { id: 'qwen/qwen3-coder-480b-a35b-instruct', label: '💪 Qwen3-Coder 480B' },
+    ];
+
+    // Build inline keyboard (2 columns)
+    const rows: Array<Array<{ text: string; callback_data: string }>> = [];
+    for (let i = 0; i < models.length; i += 2) {
+      const row = [
+        {
+          text: models[i].id === currentModel ? `✅ ${models[i].label}` : models[i].label,
+          callback_data: `/model switch ${models[i].id}`,
+        },
+      ];
+      if (i + 1 < models.length) {
+        row.push({
+          text: models[i + 1].id === currentModel ? `✅ ${models[i + 1].label}` : models[i + 1].label,
+          callback_data: `/model switch ${models[i + 1].id}`,
+        });
+      }
+      rows.push(row);
+    }
+
+    const keyboard: InlineKeyboard = { inline_keyboard: rows };
+
+    const body: Record<string, unknown> = {
+      chat_id: chatId,
+      text: `🤖 选择模型（当前: ${currentModel.split('/').pop()}）`,
+      reply_markup: keyboard,
+    };
+
+    await this.api('sendMessage', body);
   }
 
   async sendImage(jid: string, imagePath: string, caption?: string): Promise<void> {
@@ -219,7 +283,6 @@ export class TelegramChannel implements Channel {
       return;
     }
 
-    // Use multipart form data to send photo
     const fs = await import('fs');
     const formData = new FormData();
     formData.append('chat_id', String(chatId));
@@ -234,10 +297,7 @@ export class TelegramChannel implements Channel {
   async setTyping(jid: string): Promise<void> {
     const chatId = this.extractChatId(jid);
     if (!chatId) return;
-    await this.api('sendChatAction', {
-      chat_id: chatId,
-      action: 'typing',
-    });
+    await this.api('sendChatAction', { chat_id: chatId, action: 'typing' });
   }
 
   isConnected(): boolean {
@@ -255,23 +315,17 @@ export class TelegramChannel implements Channel {
   }
 
   private extractChatId(jid: string): number | null {
-    const id = jid
-      .replace(TELEGRAM_JID_SUFFIX_CHAT, '')
-      .replace(TELEGRAM_JID_SUFFIX_DM, '');
+    const id = jid.replace(TELEGRAM_JID_SUFFIX_CHAT, '').replace(TELEGRAM_JID_SUFFIX_DM, '');
     const num = parseInt(id, 10);
     return isNaN(num) ? null : num;
   }
 
   private splitMessage(text: string, limit: number): string[] {
     if (text.length <= limit) return [text];
-
     const chunks: string[] = [];
     let remaining = text;
     while (remaining.length > 0) {
-      if (remaining.length <= limit) {
-        chunks.push(remaining);
-        break;
-      }
+      if (remaining.length <= limit) { chunks.push(remaining); break; }
       let splitAt = remaining.lastIndexOf('\n', limit);
       if (splitAt < limit * 0.3) splitAt = remaining.lastIndexOf(' ', limit);
       if (splitAt < limit * 0.3) splitAt = limit;
