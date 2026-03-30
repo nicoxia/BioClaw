@@ -175,33 +175,28 @@ export class TelegramChannel implements Channel {
 
     logger.info({ data, chatId, fromId }, 'Telegram callback query received');
 
-    // Answer the callback query immediately (remove loading state)
+    // Answer the callback query immediately (remove loading spinner)
     await this.api('answerCallbackQuery', { callback_query_id: query.id });
 
-    // Process as a regular message with the callback_data as content
     if (!chatId || !fromId) return;
 
-    const isGroup = query.message.chat.type === 'group' || query.message.chat.type === 'supergroup';
-    const chatJid = isGroup
-      ? `${chatId}${TELEGRAM_JID_SUFFIX_CHAT}`
-      : `${fromId}${TELEGRAM_JID_SUFFIX_DM}`;
+    // If it's a control command (/model switch, etc), handle it as a control message
+    if (data.startsWith('/')) {
+      const isGroup = query.message.chat.type === 'group' || query.message.chat.type === 'supergroup';
+      const chatJid = isGroup
+        ? `${chatId}${TELEGRAM_JID_SUFFIX_CHAT}`
+        : `${fromId}${TELEGRAM_JID_SUFFIX_DM}`;
 
-    const senderName = [query.from.first_name, query.from.last_name].filter(Boolean).join(' ')
-      || query.from.username || String(fromId);
+      const senderName = [query.from.first_name, query.from.last_name].filter(Boolean).join(' ')
+        || query.from.username || String(fromId);
 
-    const timestamp = new Date().toISOString();
-
-    this.opts.onChatMetadata(chatJid, timestamp);
-    let groups = this.opts.registeredGroups();
-
-    if (groups[chatJid]) {
       this.opts.onMessage(chatJid, {
         id: `cb-${query.id}`,
         chat_jid: chatJid,
         sender: String(fromId),
         sender_name: senderName,
         content: data,
-        timestamp,
+        timestamp: new Date().toISOString(),
         is_from_me: false,
       });
     }
