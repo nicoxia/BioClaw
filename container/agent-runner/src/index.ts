@@ -78,7 +78,7 @@ const BASH_MAX_OUTPUT_CHARS = 12000;
 const WORKSPACE_GROUP_ROOT = '/workspace/group';
 const OPENAI_TOOL_MAX_ITERATIONS = Math.max(
   1,
-  parseInt(process.env.OPENAI_TOOL_MAX_ITERATIONS || '48', 10) || 48,
+  parseInt(process.env.OPENAI_TOOL_MAX_ITERATIONS || '10', 10) || 10,
 );
 const SKILLS_ROOT = '/home/node/.claude/skills';
 const MAX_SKILL_SUMMARY_LINES = 18;

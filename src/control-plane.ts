@@ -680,6 +680,7 @@ export async function executeControlCommand(
           'Available control commands:',
           '/status',
           '/doctor',
+          '/models [list|<number>]',
           '/provider [list|switch <name>]',
           '/model [show|switch <name>]',
           '/memory [show|set <text>|clear]',
@@ -705,6 +706,57 @@ export async function executeControlCommand(
     case '/doctor': {
       const snapshot = getDoctorSnapshot(chatJid, deps);
       return { handled: true, response: formatDoctorSnapshot(snapshot), data: snapshot };
+    }
+    case '/models': {
+      if (!agent || !agentId) {
+        return { handled: true, response: 'No agent is bound to this chat.' };
+      }
+      const provider = resolveProviderName(agent.runtimeConfig?.provider);
+      const currentModel = resolveModelName(provider, agent.runtimeConfig?.model);
+      const arg = (tokens[1] || 'list').toLowerCase();
+
+      // Model catalog — organized by speed tier
+      const catalog: Array<{ id: string; label: string; tier: string }> = [
+        { id: 'qwen/qwen3-next-80b-a3b-instruct', label: 'Qwen3-Next 80B', tier: '⚡ 快速 (<1s)' },
+        { id: 'mistralai/mistral-small-3.1-24b-instruct-2503', label: 'Mistral Small 24B', tier: '⚡ 快速 (<1s)' },
+        { id: 'stepfun-ai/step-3.5-flash', label: 'Step-3.5 Flash', tier: '⚡ 快速 (<1s)' },
+        { id: 'qwen/qwen3.5-122b-a10b', label: 'Qwen3.5 122B', tier: '⚡ 快速 (<1s)' },
+        { id: 'deepseek-ai/deepseek-v3.1', label: 'DeepSeek V3.1', tier: '🔧 中等 (~2s)' },
+        { id: 'qwen/qwen3.5-397b-a17b', label: 'Qwen3.5 397B', tier: '🔧 中等 (~2s)' },
+        { id: 'deepseek-ai/deepseek-v3.2', label: 'DeepSeek V3.2', tier: '💪 重型 (30s+)' },
+        { id: 'qwen/qwen3-coder-480b-a35b-instruct', label: 'Qwen3-Coder 480B', tier: '💪 重型 (30s+)' },
+        { id: 'nvidia/llama-3.1-nemotron-ultra-253b-v1', label: 'Nemotron 253B', tier: '💪 重型 (30s+)' },
+      ];
+
+      // Check if arg is a number (quick select)
+      const num = parseInt(arg, 10);
+      if (!isNaN(num) && num >= 1 && num <= catalog.length) {
+        const selected = catalog[num - 1];
+        const updated = {
+          ...agent,
+          runtimeConfig: { ...agent.runtimeConfig, model: selected.id },
+          updatedAt: new Date().toISOString(),
+        };
+        upsertAgentDefinition(updated);
+        return { handled: true, response: `✅ 已切换到 ${selected.label} (${selected.id})` };
+      }
+
+      // Default: show model list
+      const lines: string[] = [
+        `📋 可用模型（当前: ${currentModel}）`,
+        '',
+      ];
+      let lastTier = '';
+      catalog.forEach((m, i) => {
+        if (m.tier !== lastTier) {
+          lines.push(m.tier);
+          lastTier = m.tier;
+        }
+        const marker = m.id === currentModel ? ' ← 当前' : '';
+        lines.push(`  ${i + 1}. ${m.label}${marker}`);
+      });
+      lines.push('', '输入 /models <编号> 快速切换');
+      return { handled: true, response: lines.join('\n') };
     }
     case '/provider': {
       if (!agent || !agentId) {

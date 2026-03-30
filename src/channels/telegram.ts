@@ -204,14 +204,9 @@ export class TelegramChannel implements Channel {
       const res = await this.api('sendMessage', {
         chat_id: chatId,
         text: chunk,
-        parse_mode: 'Markdown',
       });
       if (!res.ok) {
-        // Retry without parse_mode if Markdown fails
-        await this.api('sendMessage', {
-          chat_id: chatId,
-          text: chunk,
-        });
+        logger.warn({ chatId, error: res.description }, 'Telegram sendMessage failed');
       }
     }
     logger.info({ jid, length: text.length, chunks: chunks.length }, 'Telegram message sent');
